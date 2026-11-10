@@ -1,0 +1,18 @@
+# Large / third-party artifacts
+*.apk
+# Build output
+poc/build/
+build/
+# Local signing key (build.sh generates it)
+poc/keystore/
+# Device reference screenshots (not redistributed)
+ref/
+# Raw capture frames (intermediate only; storyboards/GIFs in poc/shots and poc/*.gif are kept)
+poc/anim*/
+poc/jelly*/
+poc/seq3/
+# Agent/local config
+.commandcode/
+# OS noise
+.DS_Store
+Thumbs.db

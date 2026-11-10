@@ -1,0 +1,31 @@
+N: android=http://schemas.android.com/apk/res/android (line=5)
+  N: app=http://schemas.android.com/apk/res-auto (line=5)
+    E: RelativeLayout (line=5)
+      A: http://schemas.android.com/apk/res/android:layout_width(0x010100f4)=-1
+      A: http://schemas.android.com/apk/res/android:layout_height(0x010100f5)=-1
+        E: com.oplus.gallery.standard_lib.ui.toolbar.GToolBar (line=11)
+          A: http://schemas.android.com/apk/res/android:id(0x010100d0)=@0x7f0b0f23
+          A: http://schemas.android.com/apk/res/android:background(0x010100d4)=?0x7f04030e
+          A: http://schemas.android.com/apk/res/android:layout_width(0x010100f4)=-1
+          A: http://schemas.android.com/apk/res/android:layout_height(0x010100f5)=@0x7f07269b
+        E: EditText (line=26)
+          A: http://schemas.android.com/apk/res/android:textSize(0x01010095)=@0x7f0720b8
+          A: http://schemas.android.com/apk/res/android:ellipsize(0x010100ab)=1
+          A: http://schemas.android.com/apk/res/android:gravity(0x010100af)=0x00800033
+          A: http://schemas.android.com/apk/res/android:id(0x010100d0)=@0x7f0b0ed2
+          A: http://schemas.android.com/apk/res/android:background(0x010100d4)=@null
+          A: http://schemas.android.com/apk/res/android:layout_width(0x010100f4)=-1
+          A: http://schemas.android.com/apk/res/android:layout_height(0x010100f5)=-1
+          A: http://schemas.android.com/apk/res/android:layout_marginTop(0x010100f8)=@0x7f0720ba
+          A: http://schemas.android.com/apk/res/android:layout_marginBottom(0x010100fa)=@0x7f0720b9
+          A: http://schemas.android.com/apk/res/android:layout_below(0x01010185)=@0x7f0b0f23
+          A: http://schemas.android.com/apk/res/android:lineSpacingMultiplier(0x01010218)=1.4
+          A: http://schemas.android.com/apk/res/android:textAlignment(0x010103b1)=5
+          A: http://schemas.android.com/apk/res/android:paddingHorizontal(0x0101053d)=@0x7f0720bb
+        E: com.coui.appcompat.bottomnavigation.COUINavigationView (line=34)
+          A: http://schemas.android.com/apk/res/android:id(0x010100d0)=@0x7f0b09d3
+          A: http://schemas.android.com/apk/res/android:layout_width(0x010100f4)=-1
+          A: http://schemas.android.com/apk/res/android:layout_height(0x010100f5)=-2
+          A: http://schemas.android.com/apk/res/android:layout_alignParentBottom(0x0101018e)=true
+          A: http://schemas.android.com/apk/res-auto:couiNaviMenu(0x7f040405)=@0x7f100047
+          A: http://schemas.android.com/apk/res-auto:navigationType(0x7f04093b)=0

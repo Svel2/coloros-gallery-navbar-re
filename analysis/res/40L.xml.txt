@@ -1,0 +1,11 @@
+N: android=http://schemas.android.com/apk/res/android (line=8)
+  E: rotate (line=8)
+    A: http://schemas.android.com/apk/res/android:fromDegrees(0x010101b3)=180
+    A: http://schemas.android.com/apk/res/android:toDegrees(0x010101b4)=180
+    A: http://schemas.android.com/apk/res/android:pivotX(0x010101b5)=0.500000%
+    A: http://schemas.android.com/apk/res/android:pivotY(0x010101b6)=0.500000%
+      E: bitmap (line=13)
+        A: http://schemas.android.com/apk/res/android:src(0x01010119)=@0x7f080aa0
+        A: http://schemas.android.com/apk/res/android:alpha(0x0101031f)=0.64
+        A: http://schemas.android.com/apk/res/android:tileModeX(0x01010477)=1
+        A: http://schemas.android.com/apk/res/android:tileModeY(0x01010478)=0

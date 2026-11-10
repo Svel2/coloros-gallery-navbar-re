@@ -1,0 +1,15 @@
+N: android=http://schemas.android.com/apk/res/android (line=15)
+  N: app=http://schemas.android.com/apk/res-auto (line=15)
+    E: com.coui.appcompat.bottomnavigation.COUINavigationView (line=15)
+      A: http://schemas.android.com/apk/res/android:theme(0x01010000)=@0x7f1504c4
+      A: http://schemas.android.com/apk/res/android:id(0x010100d0)=@0x7f0b0635
+      A: http://schemas.android.com/apk/res/android:background(0x010100d4)=@0x0106000d
+      A: http://schemas.android.com/apk/res/android:layout_width(0x010100f4)=-1
+      A: http://schemas.android.com/apk/res/android:layout_height(0x010100f5)=-1
+      A: http://schemas.android.com/apk/res/android:layout_alignParentBottom(0x0101018e)=true
+      A: http://schemas.android.com/apk/res-auto:couiNaviBackground(0x7f040403)=@0x7f080593
+      A: http://schemas.android.com/apk/res-auto:couiNaviIconTint(0x7f040404)=@null
+      A: http://schemas.android.com/apk/res-auto:couiNaviMenu(0x7f040405)=@0x7f10004b
+      A: http://schemas.android.com/apk/res-auto:couiNaviTextColor(0x7f040406)=@0x7f061092
+      A: http://schemas.android.com/apk/res-auto:couiNaviTextSize(0x7f040407)=@0x7f071d14
+      A: http://schemas.android.com/apk/res-auto:navigationType(0x7f04093b)=0
