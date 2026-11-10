@@ -207,6 +207,22 @@ adb shell am start -n dev.iqbal.blurnavpoc/.MainActivity --ei mode 1 --ei dark 0
 # window blur: adb shell am start -n dev.iqbal.blurnavpoc/.WindowBlurActivity --ei dark 0
 ```
 
+### Build di HP (Termux)
+
+`build.sh` juga jalan tanpa Android SDK: tool diambil dari `PATH`, `android.jar` dari
+`ANDROID_JAR`. Langkah ini belum diuji di Termux.
+
+```bash
+pkg install git openjdk-17 python aapt aapt2 d8 apksigner unzip curl
+curl -LO https://dl.google.com/android/repository/platform-34-ext7_r03.zip
+unzip -j platform-34-ext7_r03.zip android-34/android.jar -d ~/android-34
+ANDROID_JAR=~/android-34/android.jar ./build.sh
+termux-setup-storage && cp build/blurnav-poc.apk ~/storage/downloads/
+```
+
+Lalu install APK dari folder Download, dan jalankan dari Termux:
+`am start -n dev.iqbal.blurnavpoc/.MainActivity --ei mode 1 --ei prog 1`.
+
 Uninstall: `adb uninstall dev.iqbal.blurnavpoc`
 
 ## Batasan
