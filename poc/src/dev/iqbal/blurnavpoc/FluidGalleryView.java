@@ -3,9 +3,11 @@ package dev.iqbal.blurnavpoc;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.view.Choreographer;
 import android.view.MotionEvent;
@@ -16,7 +18,8 @@ import android.view.View;
  * Pager + scroll sederhana tanpa AndroidX:
  *  - 2 halaman sesuai Gallery asli: Photos (timeline) dan Albums (grid album)
  *  - drag horizontal = pindah halaman dengan spring settle (fluid)
- *  - drag vertikal = scroll, fling dengan spring
+ *  - drag vertikal = scroll, fling dengan peluruhan kecepatan + pegas di batas
+ *  - scrim gradient di dasar layar (padanan bottomTranslucentView di main_tab_layout)
  *  - tiap gerakan memberi callback supaya blur bar ikut update
  */
 public class FluidGalleryView extends View {
@@ -61,12 +64,32 @@ public class FluidGalleryView extends View {
     private long lastFrame;
     private float timeScale = 1f;
 
+    /** Fling: kecepatan meluruh eksponensial, v(t) = v0·e^(−k·t); jarak total = v0 / k. */
+    private static final float FLING_DECAY = 4f;
+    private boolean flinging = false;
+    private float flingV;
+
+    /** main_tab_bottom_nav_mask_repeat: alpha 0.64. Tinggi di sini perkiraan PoC. */
+    private static final float SCRIM_ALPHA = 0.64f;
+    private static final float SCRIM_HEIGHT_DP = 132f;
+    private boolean scrimEnabled = true;
+    private final Paint scrimPaint = new Paint();
+    private Shader scrimShader;
+    private int scrimKey = -1;
+
+    private final Typeface medium = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+    private final Typeface regular = Typeface.create("sans-serif", Typeface.NORMAL);
+    private final RectF tmpRect = new RectF();
+    private final RectF cardRect = new RectF();
+    private final Path tilePath = new Path();
+    private final float[] hsv = new float[3];
+
     public FluidGalleryView(Context c) {
         super(c);
         pageSpring.configure(0.40, 0.32);
         scrollSpring.configure(0.40, 0.22);
-        textPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        subPaint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        textPaint.setTypeface(medium);
+        subPaint.setTypeface(regular);
         iconPaint.setStyle(Paint.Style.STROKE);
         iconPaint.setStrokeCap(Paint.Cap.ROUND);
         setFocusable(true);
@@ -78,6 +101,11 @@ public class FluidGalleryView extends View {
 
     public void setTimeScale(float f) {
         timeScale = Math.max(0.05f, f);
+    }
+
+    public void setScrimEnabled(boolean on) {
+        scrimEnabled = on;
+        invalidate();
     }
 
     public void setDark(boolean d) {
@@ -138,6 +166,31 @@ public class FluidGalleryView extends View {
             drawPage(canvas, p, w, h);
             canvas.restoreToCount(save);
         }
+        drawScrim(canvas, w, h);
+    }
+
+    /**
+     * Scrim di belakang nav bar: gradient transparan → warna latar (alpha 0.64). Digambar
+     * sebagai bagian konten, jadi ikut ter-blur oleh bar seperti urutan view aslinya.
+     * Memudar saat konten habis di bawah bar (inferensi; APK menganimasikan alpha view ini).
+     */
+    private void drawScrim(Canvas canvas, int w, int h) {
+        if (!scrimEnabled) return;
+        float under = clamp((maxScroll - scroll) / dp(40), 0f, 1f);
+        if (under <= 0.01f) return;
+        int key = h * 2 + (dark ? 1 : 0);
+        float top = h - dp(SCRIM_HEIGHT_DP);
+        if (scrimShader == null || scrimKey != key) {
+            int rgb = dark ? 0x111214 : 0xF7F7F9;
+            int full = Math.round(255 * SCRIM_ALPHA);
+            scrimShader = new LinearGradient(0, top, 0, h,
+                    new int[]{rgb, ((full * 2 / 5) << 24) | rgb, (full << 24) | rgb},
+                    new float[]{0f, 0.45f, 1f}, Shader.TileMode.CLAMP);
+            scrimKey = key;
+        }
+        scrimPaint.setShader(scrimShader);
+        scrimPaint.setAlpha(Math.round(255 * under));
+        canvas.drawRect(0, top, w, h, scrimPaint);
     }
 
     private void drawPage(Canvas canvas, int p, int w, int h) {
@@ -150,7 +203,7 @@ public class FluidGalleryView extends View {
             textPaint.setColor(dark ? 0xFFEDEDED : 0xFF111111);
             textPaint.setTextSize(dp(28));
             textPaint.setTextAlign(Paint.Align.LEFT);
-            textPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            textPaint.setTypeface(medium);
             canvas.drawText(TITLES[p], dp(18), titleY, textPaint);
 
             subPaint.setColor(dark ? 0x99FFFFFF : 0x99000000);
@@ -194,7 +247,7 @@ public class FluidGalleryView extends View {
 
         subPaint.setColor(dark ? 0xCCFFFFFF : 0xCC000000);
         subPaint.setTextSize(dp(13));
-        subPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        subPaint.setTypeface(medium);
         subPaint.setTextAlign(Paint.Align.LEFT);
 
         int lastDateBlock = -1;
@@ -236,47 +289,54 @@ public class FluidGalleryView extends View {
 
             float l = pad + col * (cw + gap);
             float hue = (i * 41f + 20f) % 360f;
-            float[] hsv = {hue, 0.35f + (i % 4) * 0.09f, 0.93f - (i % 3) * 0.08f};
+            hsv[0] = hue;
+            hsv[1] = 0.35f + (i % 4) * 0.09f;
+            hsv[2] = 0.93f - (i % 3) * 0.08f;
             tilePaint.setStyle(Paint.Style.FILL);
             tilePaint.setColor(Color.HSVToColor(hsv));
-            RectF card = new RectF(l, t, l + cw, t + ch - dp(40));
+            RectF card = cardRect;
+            card.set(l, t, l + cw, t + ch - dp(40));
             canvas.drawRoundRect(card, dp(14), dp(14), tilePaint);
 
             // potongan mini tile di dalam kartu album
             tilePaint.setColor(0x38FFFFFF);
             float inner = dp(8);
-            canvas.drawRoundRect(new RectF(card.left + inner, card.top + inner,
-                    card.left + cw * 0.46f, card.top + (card.height()) * 0.46f),
-                    dp(8), dp(8), tilePaint);
-            canvas.drawRoundRect(new RectF(card.right - cw * 0.46f, card.bottom - card.height() * 0.46f,
-                    card.right - inner, card.bottom - inner),
-                    dp(8), dp(8), tilePaint);
+            tmpRect.set(card.left + inner, card.top + inner,
+                    card.left + cw * 0.46f, card.top + (card.height()) * 0.46f);
+            canvas.drawRoundRect(tmpRect, dp(8), dp(8), tilePaint);
+            tmpRect.set(card.right - cw * 0.46f, card.bottom - card.height() * 0.46f,
+                    card.right - inner, card.bottom - inner);
+            canvas.drawRoundRect(tmpRect, dp(8), dp(8), tilePaint);
 
             textPaint.setTextAlign(Paint.Align.LEFT);
             textPaint.setColor(dark ? 0xFFEDEDED : 0xFF111111);
             textPaint.setTextSize(dp(14));
-            textPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            textPaint.setTypeface(medium);
             canvas.drawText(ALBUMS[i], l + dp(2), t + ch - dp(20), textPaint);
 
             subPaint.setColor(dark ? 0x99FFFFFF : 0x99000000);
             subPaint.setTextSize(dp(11));
-            subPaint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+            subPaint.setTypeface(regular);
             canvas.drawText((12 + i * 7) + " item", l + dp(2), t + ch - dp(4), subPaint);
         }
     }
 
     private void drawTile(Canvas canvas, float l, float t, int size, int i, int page) {
         float hue = (page * 53f + i * 29f) % 360f;
-        float[] hsv = {hue, 0.40f + (i % 5) * 0.09f, 0.92f - (i % 3) * 0.10f};
+        hsv[0] = hue;
+        hsv[1] = 0.40f + (i % 5) * 0.09f;
+        hsv[2] = 0.92f - (i % 3) * 0.10f;
         tilePaint.setColor(Color.HSVToColor(hsv));
         tilePaint.setStyle(Paint.Style.FILL);
-        RectF r = new RectF(l, t, l + size, t + size);
+        RectF r = tmpRect;
+        r.set(l, t, l + size, t + size);
         canvas.drawRoundRect(r, dp(10), dp(10), tilePaint);
 
         tilePaint.setColor(0x33FFFFFF);
         canvas.drawCircle(l + size * 0.72f, t + size * 0.26f, size * 0.13f, tilePaint);
 
-        Path path = new Path();
+        Path path = tilePath;
+        path.reset();
         path.moveTo(l + size * 0.08f, t + size * 0.88f);
         path.lineTo(l + size * 0.40f, t + size * 0.46f);
         path.lineTo(l + size * 0.60f, t + size * 0.72f);
@@ -287,7 +347,8 @@ public class FluidGalleryView extends View {
         canvas.drawPath(path, tilePaint);
 
         tilePaint.setColor(0x25000000);
-        canvas.drawRoundRect(new RectF(l, t + size - dp(18), l + size, t + size), dp(10), dp(10), tilePaint);
+        r.set(l, t + size - dp(18), l + size, t + size);
+        canvas.drawRoundRect(r, dp(10), dp(10), tilePaint);
         subPaint.setTextSize(dp(9));
         subPaint.setTextAlign(Paint.Align.LEFT);
         subPaint.setColor(0xDDFFFFFF);
@@ -307,6 +368,7 @@ public class FluidGalleryView extends View {
                 axis = 0;
                 pageSpring.active = false;
                 scrollSpring.active = false;
+                flinging = false;
                 if (vt == null) vt = VelocityTracker.obtain();
                 else vt.clear();
                 vt.addMovement(e);
@@ -347,9 +409,14 @@ public class FluidGalleryView extends View {
                     pageSpring.setTarget(target);
                     startAnim();
                 } else if (axis == 2) {
-                    float target = clamp(scroll - vy * 0.12f, 0f, maxScroll);
-                    scrollSpring.snapTo(scroll);
-                    scrollSpring.setTarget(target);
+                    if (scroll < 0f || scroll > maxScroll || Math.abs(vy) < dp(60)) {
+                        // overscroll atau lepas tanpa kecepatan: pegas kembali ke batas
+                        scrollSpring.snapTo(scroll);
+                        scrollSpring.setTarget(clamp(scroll, 0f, maxScroll));
+                    } else {
+                        flinging = true;
+                        flingV = -vy;
+                    }
                     startAnim();
                 }
                 if (listener != null) listener.onMotion(vy);
@@ -363,22 +430,43 @@ public class FluidGalleryView extends View {
     private void startAnim() {
         if (looping) return;
         looping = true;
-        lastFrame = System.nanoTime();
+        lastFrame = 0;
         Choreographer.getInstance().postFrameCallback(frame);
     }
 
     private final Choreographer.FrameCallback frame = new Choreographer.FrameCallback() {
         @Override
         public void doFrame(long frameTimeNanos) {
-            long now = System.nanoTime();
-            double dt = ((now - lastFrame) / 1e9) / timeScale;
-            lastFrame = now;
+            // Waktu vsync, bukan System.nanoTime(): langkah animasi tidak ikut jitter callback.
+            double dt = (lastFrame == 0 ? 1.0 / 120.0
+                    : (frameTimeNanos - lastFrame) / 1e9) / timeScale;
+            lastFrame = frameTimeNanos;
+            dt = Math.max(0.001, Math.min(0.05, dt));
 
             boolean more = false;
             if (pageSpring.update(dt)) more = true;
             pagePos = (float) pageSpring.value;
-            if (scrollSpring.update(dt)) more = true;
-            scroll = (float) scrollSpring.value;
+            if (flinging) {
+                scroll += flingV * (float) dt;
+                flingV *= (float) Math.exp(-FLING_DECAY * dt);
+                if (scroll < 0f || scroll > maxScroll) {
+                    // Menabrak batas: sisa kecepatan (dibatasi) diteruskan ke pegas overscroll.
+                    flinging = false;
+                    float cap = dp(600);
+                    scrollSpring.value = scroll;
+                    scrollSpring.velocity = clamp(flingV, -cap, cap);
+                    scrollSpring.setTarget(scroll < 0f ? 0f : maxScroll);
+                } else if (Math.abs(flingV) < dp(8)) {
+                    flinging = false;
+                    scrollSpring.snapTo(scroll);
+                } else {
+                    more = true;
+                }
+            }
+            if (!flinging) {
+                if (scrollSpring.update(dt)) more = true;
+                scroll = (float) scrollSpring.value;
+            }
 
             if (listener != null) listener.onPageProgress(pagePos);
             int settled = clamp(Math.round(pagePos), 0, PAGES - 1);
@@ -388,6 +476,7 @@ public class FluidGalleryView extends View {
                 page = settled;
                 updateMaxScroll(getWidth(), getHeight());
                 if (changed) {
+                    flinging = false;
                     scroll = 0;
                     scrollSpring.snapTo(0);
                     if (listener != null) listener.onPageSettled(settled);

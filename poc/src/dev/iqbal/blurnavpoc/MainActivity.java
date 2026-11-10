@@ -1,12 +1,9 @@
 package dev.iqbal.blurnavpoc;
 
 import android.app.Activity;
-import android.graphics.Bitmap;
-import android.graphics.BitmapShader;
 import android.graphics.BlendMode;
 import android.graphics.BlendModeColorFilter;
 import android.graphics.Canvas;
-import android.graphics.ComposeShader;
 import android.graphics.LinearGradient;
 import android.graphics.Matrix;
 import android.graphics.Paint;
@@ -39,7 +36,7 @@ import android.widget.Toast;
  *  - tombol aksesori 56dp di tepi kiri/kanan, margin 16dp
  *  - container setinggi 88dp, bottom margin 8dp (menu_to_screen_navi_distance)
  *
- * Efek  : snapshot backdrop + RenderEffect (blur 25 px + 2 tint layer COUI),
+ * Efek  : backdrop direkam ke RenderNode + RenderEffect (blur 25 px + 2 tint layer COUI),
  *         fallback solid couiColorBar (#FAFAFA / #1E1E1E).
  * Gesture: swipe horizontal = ganti tab (konten ikut jari), drag/tap di kapsul.
  *          Press + jelly = port COUI: press scale 0.85-0.97 (area/aspect), rubber 28dp,
@@ -57,6 +54,8 @@ public class MainActivity extends Activity {
     private FluidGalleryView gallery;
     private NavBar bar;
     private TextView modeBtn, themeBtn;
+    /** Squish bar saat fling = tambahan PoC, bukan perilaku COUI; --ei squish 0 mematikan. */
+    private boolean squishOnFling = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -97,7 +96,7 @@ public class MainActivity extends Activity {
             @Override
             public void onMotion(float vy) {
                 bar.scheduleCapture();
-                if (Math.abs(vy) > 300f) bar.nudgeFromFling(vy);
+                if (squishOnFling && Math.abs(vy) > 300f) bar.nudgeFromFling(vy);
             }
 
             @Override
@@ -151,6 +150,8 @@ public class MainActivity extends Activity {
         Spring.tempo = Math.max(0.25, getIntent().getFloatExtra("speed", 1f));
         bar.setLightGain(getIntent().getFloatExtra("light", 1.5f));
         bar.setLeanGain(getIntent().getFloatExtra("lean", 1f));
+        squishOnFling = getIntent().getIntExtra("squish", 1) != 0;
+        gallery.setScrimEnabled(getIntent().getIntExtra("scrim", 1) != 0);
 
         float slowmo = getIntent().getFloatExtra("slowmo", 1f);
         if (slowmo > 0f && slowmo != 1f) {
@@ -223,7 +224,7 @@ public class MainActivity extends Activity {
     }
 
     // ==================================================================
-    // NavBar: kapsul 2 item + 2 tombol aksesori, blur snapshot di-clip
+    // NavBar: kapsul 2 item + 2 tombol aksesori, blur backdrop di-clip
     // ke bentuk aslinya (bukan full-width seperti versi sebelumnya).
     // ==================================================================
     static class NavBar extends View {
@@ -239,7 +240,6 @@ public class MainActivity extends Activity {
         private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint iconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint blurPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path shapes = new Path();
         private final Path shapeA = new Path();
         private final Path shapeB = new Path();
@@ -267,25 +267,43 @@ public class MainActivity extends Activity {
         private final Matrix jelly = new Matrix();
         private final Matrix ink = new Matrix();
         private final Matrix accMatrix = new Matrix();
-        private float lastShadowX, lastShadowY, lastShadowN;
 
-        private Bitmap snapshot;
-        private BitmapShader snapshotShader;
-        private RenderNode blurNode;
+        /** Radius blur COUI TYPE_FRAMEWORK_BOTTOM_BAR (px, bukan dp). */
+        private static final float BLUR_RADIUS = 25f;
+        /** Tingkat tengah progressive blur: 0 → 10 → 25 px. */
+        private static final float BLUR_RADIUS_MID = 10f;
+        /** Ruang ekstra atas/bawah supaya sampel blur di tepi kapsul bukan piksel mirror. */
+        private static final int BLUR_PAD = 40;
+
+        /** Konten di belakang bar, direkam langsung (tanpa bitmap) di frame yang sama. */
+        private RenderNode contentNode;
+        private RenderNode blurNode;    // blur 25 px + tint
+        private RenderNode midNode;     // blur 10 px + tint (progressive)
+        private RenderNode tintNode;    // tint saja, radius 0 (progressive)
+        private boolean contentDirty = true;
+        private boolean backdropDark;
+        private final int[] locContent = new int[2];
+        private final int[] locSelf = new int[2];
         /** 0 = uniform (seperti APK), 1 = 0→25 px ke bawah, 2 = 25→0 px ke bawah. */
         private int progressiveMode = 1;
-        private final Paint sharpPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private Shader sharpMask;
-        private int sharpMaskMode = -1;
-        private int sharpMaskHeight = -1;
+        private final Paint maskPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private Shader maskSharp;
+        private Shader maskMid;
+        private int maskMode = -1;
+        private int maskHeight = -1;
         private RenderNode shadowNode;
         private RenderNode causticNode;
-        private int shadowKey = -1;
-        private int causticKey = -1;
+        private long shadowKey = -1;
+        private long causticKey = -1;
         private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint causticPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private RenderEffect blurEffect;
-        private boolean capturePosted = false;
+        private Shader strokeShader;
+        private int strokeShaderKey = -1;
+        private RadialGradient lightShader;
+        private int lightShaderAlpha = -1;
+        /** Kontrol yang sedang menyala (1 kapsul, 3/4 aksesori); bertahan sampai glow padam. */
+        private int lightTarget = 1;
+        private final float[] meltPt = new float[2];
 
         private boolean windowMode = false;
         private boolean crossBlurEnabled = false;
@@ -329,6 +347,11 @@ public class MainActivity extends Activity {
         private static final float HANDUP_RESPONSE_ACCESSORY = 0.42f;
         private static final float HANDUP_BOUNCE = 0.65f;
         private static final float DRAG_DEAD_ZONE_DP = 5f;
+
+        private static final float MELT_RESPONSE = 0.55f;
+        private static final float MELT_BOUNCE = 0.35f;
+        /** Leher metaball putus saat celah kapsul–aksesori melewati jarak ini. */
+        private static final float MELT_MAX_GAP_DP = 12f;
 
         /** InteractiveHighlight: pool cahaya di bawah jari. */
         private static final float LIGHT_RADIUS_DP = 40f;
@@ -376,9 +399,10 @@ public class MainActivity extends Activity {
             selAnim.configure(0.22, 0.10);
             selAnim.tolerance = 0.004;
             selAnim.snapTo(1.0);
-            accLeft.configure(0.38, 0.32);
+            // AccessorySideExpansionController: translationX & scale = response 0.55, bounce 0.35.
+            accLeft.configure(MELT_RESPONSE, MELT_BOUNCE);
             accLeft.tolerance = 0.5;
-            accScale.configure(0.38, 0.32);
+            accScale.configure(MELT_RESPONSE, MELT_BOUNCE);
             accScale.tolerance = 0.002;
             accScale.snapTo(0.5);
 
@@ -413,7 +437,7 @@ public class MainActivity extends Activity {
             // Sama seperti item view COUI: teks tetap tajam saat seluruh kapsul ditransform.
             textPaint.setLinearText(true);
             textPaint.setSubpixelText(true);
-            blurPaint.setFilterBitmap(true);
+            maskPaint.setBlendMode(BlendMode.DST_IN);
         }
 
         void bindContent(View v) {
@@ -433,7 +457,6 @@ public class MainActivity extends Activity {
             int m = Math.max(0, Math.min(2, mode));
             if (m == progressiveMode) return;
             progressiveMode = m;
-            if (content != null) scheduleCapture();
             invalidate();
         }
 
@@ -671,6 +694,7 @@ public class MainActivity extends Activity {
                     accDragged = false;
                     downX = e.getX();
                     downY = e.getY();
+                    lightTarget = hit <= N ? 1 : hit;
                     // LightFollow: pool cahaya menyala di titik sentuh.
                     glowSw.configure(0.2f, 0f);
                     glowSw.setTarget(1f);
@@ -873,73 +897,131 @@ public class MainActivity extends Activity {
 
         // ---------------- capture backdrop ----------------
 
+        /** Konten di belakang bar berubah: rekam ulang di onDraw berikutnya (frame yang sama). */
         void scheduleCapture() {
-            if (capturePosted || content == null || getWidth() == 0) return;
-            if (mode == MODE_SOLID || windowMode) return;
-            capturePosted = true;
-            postOnAnimation(() -> {
-                capturePosted = false;
-                captureNow();
-            });
-        }
-
-        private void captureNow() {
             if (content == null || mode == MODE_SOLID || windowMode) return;
-            int w = getWidth();
-            int h = getHeight();
-            if (w <= 0 || h <= 0) return;
-
-            if (snapshot == null || snapshot.getWidth() != w || snapshot.getHeight() != h) {
-                snapshot = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-                snapshotShader = null;
-                sharpMask = null;
-                sharpMaskMode = -1;
-                sharpMaskHeight = -1;
-                sharpPaint.setShader(null);
-            }
-            Canvas canvas = new Canvas(snapshot);
-            canvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
-
-            int[] cl = new int[2];
-            int[] bl = new int[2];
-            content.getLocationInWindow(cl);
-            getLocationInWindow(bl);
-            canvas.translate(cl[0] - bl[0], cl[1] - bl[1]);
-            content.draw(canvas);
-
-            try {
-                int c1 = dark ? 0x80666666 : 0xB3666666;
-                BlendMode m1 = dark ? BlendMode.OVERLAY : BlendMode.COLOR_DODGE;
-                int c2 = dark ? 0xB3262626 : 0x99F5F5F5;
-
-                if (blurNode == null || blurNode.getWidth() != w
-                        || blurNode.getHeight() != h) {
-                    blurNode = new RenderNode("nav-blur");
-                    blurNode.setPosition(0, 0, w, h);
-                }
-                RecordingCanvas rc = blurNode.beginRecording();
-                rc.drawBitmap(snapshot, 0, 0, null);
-                blurNode.endRecording();
-                RenderEffect effect = buildBlurEffect(25f, c1, m1, c2);
-                blurNode.setRenderEffect(effect);
-                blurEffect = effect;
-            } catch (Throwable t) {
-                blurEffect = null;
-                blurNode = null;
-            }
+            contentDirty = true;
             invalidate();
         }
 
+        /**
+         * Rekam konten langsung ke RenderNode lalu blur di GPU. Dibanding snapshot bitmap:
+         * tidak ada upload tekstur per frame dan tidak tertinggal satu frame dari konten.
+         *
+         * @return false kalau backdrop tidak bisa dibuat (bar jatuh ke fallback solid)
+         */
+        private boolean updateBackdrop() {
+            if (content == null) return false;
+            int w = getWidth();
+            int nh = getHeight() + BLUR_PAD * 2;
+            try {
+                if (contentNode == null || contentNode.getWidth() != w
+                        || contentNode.getHeight() != nh || backdropDark != dark) {
+                    contentNode = new RenderNode("nav-content");
+                    contentNode.setPosition(0, 0, w, nh);
+                    blurNode = effectNode("nav-blur", w, nh, BLUR_RADIUS);
+                    midNode = effectNode("nav-blur-mid", w, nh, BLUR_RADIUS_MID);
+                    tintNode = effectNode("nav-tint", w, nh, 0f);
+                    backdropDark = dark;
+                    contentDirty = true;
+                }
+                if (contentDirty) {
+                    content.getLocationInWindow(locContent);
+                    getLocationInWindow(locSelf);
+                    RecordingCanvas rc = contentNode.beginRecording();
+                    try {
+                        rc.translate(locContent[0] - locSelf[0],
+                                locContent[1] - locSelf[1] + BLUR_PAD);
+                        content.draw(rc);
+                    } finally {
+                        contentNode.endRecording();
+                    }
+                    recordEffect(blurNode);
+                    recordEffect(midNode);
+                    recordEffect(tintNode);
+                    contentDirty = false;
+                }
+                return true;
+            } catch (Throwable t) {
+                contentNode = null;
+                blurNode = null;
+                midNode = null;
+                tintNode = null;
+                return false;
+            }
+        }
+
+        private RenderNode effectNode(String name, int w, int h, float radius) {
+            RenderNode node = new RenderNode(name);
+            node.setPosition(0, 0, w, h);
+            node.setRenderEffect(buildBlurEffect(radius,
+                    dark ? 0x80666666 : 0xB3666666,
+                    dark ? BlendMode.OVERLAY : BlendMode.COLOR_DODGE,
+                    dark ? 0xB3262626 : 0x99F5F5F5));
+            return node;
+        }
+
+        private void recordEffect(RenderNode node) {
+            RecordingCanvas rc = node.beginRecording();
+            try {
+                rc.drawRenderNode(contentNode);
+            } finally {
+                node.endRecording();
+            }
+        }
+
+        /** Blur (MIRROR, seperti COUI) + dua layer tint. Radius 0 = tint saja. */
         private RenderEffect buildBlurEffect(float radius, int c1, BlendMode m1, int c2) {
-            // RenderEffect menolak radius 0; 0.01 px praktis sama dengan tanpa blur.
-            float r = Math.max(0.01f, radius);
-            RenderEffect effect = RenderEffect.createBlurEffect(
-                    r, r, Shader.TileMode.CLAMP);
-            effect = RenderEffect.createColorFilterEffect(
-                    new BlendModeColorFilter(c1, m1), effect);
-            effect = RenderEffect.createColorFilterEffect(
+            BlendModeColorFilter f1 = new BlendModeColorFilter(c1, m1);
+            RenderEffect effect = radius > 0.01f
+                    ? RenderEffect.createColorFilterEffect(f1, RenderEffect.createBlurEffect(
+                            radius, radius, Shader.TileMode.MIRROR))
+                    : RenderEffect.createColorFilterEffect(f1);
+            return RenderEffect.createColorFilterEffect(
                     new BlendModeColorFilter(c2, BlendMode.LUMINOSITY), effect);
-            return effect;
+        }
+
+        private void drawBackdrop(Canvas canvas, RenderNode node) {
+            int save = canvas.save();
+            // Lawan squish: backdrop harus tetap sejajar dengan konten di belakangnya.
+            canvas.translate(0, -BLUR_PAD - (float) squish.value);
+            canvas.drawRenderNode(node);
+            canvas.restoreToCount(save);
+        }
+
+        /** Layer backdrop yang alpha-nya dipotong gradient vertikal (DST_IN). */
+        private void drawMaskedBackdrop(Canvas canvas, RenderNode node, Shader mask) {
+            int layer = canvas.saveLayer(0, 0, getWidth(), getHeight(), null);
+            drawBackdrop(canvas, node);
+            maskPaint.setShader(mask);
+            canvas.drawRect(0, 0, getWidth(), getHeight(), maskPaint);
+            canvas.restoreToCount(layer);
+        }
+
+        /**
+         * Kaca: blur 25 px penuh; mode progressive menumpuk 10 px lalu 0 px di sisi tajamnya.
+         * Ketiga tingkat memakai tint yang sama, jadi warna kaca rata dari atas ke bawah.
+         */
+        private void drawGlass(Canvas canvas) {
+            drawBackdrop(canvas, blurNode);
+            if (progressiveMode == 0) return;
+            int height = getHeight();
+            if (maskSharp == null || maskMode != progressiveMode || maskHeight != height) {
+                float near = progressiveMode == 1 ? capTop() : capTop() + capH();
+                float far = progressiveMode == 1 ? capTop() + capH() : capTop();
+                int on = 0xFFFFFFFF;
+                int off = 0x00FFFFFF;
+                maskSharp = new LinearGradient(0, near, 0, far,
+                        new int[]{on, off, off}, new float[]{0f, 0.45f, 1f},
+                        Shader.TileMode.CLAMP);
+                maskMid = new LinearGradient(0, near, 0, far,
+                        new int[]{on, on, off, off}, new float[]{0f, 0.35f, 0.9f, 1f},
+                        Shader.TileMode.CLAMP);
+                maskMode = progressiveMode;
+                maskHeight = height;
+            }
+            drawMaskedBackdrop(canvas, midNode, maskMid);
+            drawMaskedBackdrop(canvas, tintNode, maskSharp);
         }
 
         // ---------------- anim loop ----------------
@@ -947,16 +1029,17 @@ public class MainActivity extends Activity {
         private void startAnim() {
             if (animating) return;
             animating = true;
-            lastFrame = System.nanoTime();
+            lastFrame = 0;
             Choreographer.getInstance().postFrameCallback(frameCb);
         }
 
         private final Choreographer.FrameCallback frameCb = new Choreographer.FrameCallback() {
             @Override
             public void doFrame(long frameTimeNanos) {
-                long now = System.nanoTime();
-                double dt = ((now - lastFrame) / 1e9) / timeScale;
-                lastFrame = now;
+                // Waktu vsync, bukan System.nanoTime(): langkah pegas tidak ikut jitter callback.
+                double dt = (lastFrame == 0 ? 1.0 / 120.0
+                        : (frameTimeNanos - lastFrame) / 1e9) / timeScale;
+                lastFrame = frameTimeNanos;
 
                 boolean more = false;
                 if (indX.update(dt)) more = true;
@@ -1029,8 +1112,71 @@ public class MainActivity extends Activity {
             accMatrix.setScale(ps * motionScaleX(which), ps * motionScaleY(which));
             accMatrix.postTranslate(cx + motionTransX(which), cy + motionTransY(which));
             shapeB.transform(accMatrix);
-            shapeC.op(shapeA, shapeB, Path.Op.UNION);
-            shapeA.set(shapeC);
+            unionIntoShapeA();
+        }
+
+        private void unionIntoShapeA() {
+            if (shapeC.op(shapeA, shapeB, Path.Op.UNION)) shapeA.set(shapeC);
+        }
+
+        private static double unit(double v) {
+            return v < -1.0 ? -1.0 : (v > 1.0 ? 1.0 : v);
+        }
+
+        /**
+         * Leher metaball antara dua lingkaran (ujung kiri kapsul dan aksesori): dua kurva
+         * bezier yang menyinggung kedua lingkaran, sehingga sambungan melengkung seperti
+         * cairan, bukan lipatan tajam hasil UNION polos. Lebar leher menyusut ke nol saat
+         * celah mencapai MELT_MAX_GAP_DP, jadi putusnya halus. Ini pendekatan geometri untuk
+         * OplusMaterialMetaBallParams (SDF) yang dipakai COUI.
+         */
+        private void addMeltNeck(float c1x, float c1y, float r1, float c2x, float c2y, float r2) {
+            float dx = c2x - c1x;
+            float dy = c2y - c1y;
+            float d = (float) Math.hypot(dx, dy);
+            if (r1 <= 0f || r2 <= 0f || d <= Math.abs(r1 - r2) + 0.5f) return;
+            float gap = d - r1 - r2;
+            float maxGap = dp(MELT_MAX_GAP_DP);
+            if (gap >= maxGap) return;
+            double v = 0.5 * (gap <= 0f ? 1.0 : 1.0 - gap / maxGap);
+            if (v < 0.02) return;
+
+            double u1 = 0.0;
+            double u2 = 0.0;
+            if (d < r1 + r2) {
+                u1 = Math.acos(unit((r1 * r1 + d * d - r2 * r2) / (2.0 * r1 * d)));
+                u2 = Math.acos(unit((r2 * r2 + d * d - r1 * r1) / (2.0 * r2 * d)));
+            }
+            double between = Math.atan2(dy, dx);
+            double spread = Math.acos(unit((r1 - r2) / d));
+            double a1 = between + u1 + (spread - u1) * v;
+            double a2 = between - u1 - (spread - u1) * v;
+            double a3 = between + Math.PI - u2 - (Math.PI - u2 - spread) * v;
+            double a4 = between - Math.PI + u2 + (Math.PI - u2 - spread) * v;
+
+            float p1x = c1x + r1 * (float) Math.cos(a1), p1y = c1y + r1 * (float) Math.sin(a1);
+            float p2x = c1x + r1 * (float) Math.cos(a2), p2y = c1y + r1 * (float) Math.sin(a2);
+            float p3x = c2x + r2 * (float) Math.cos(a3), p3y = c2y + r2 * (float) Math.sin(a3);
+            float p4x = c2x + r2 * (float) Math.cos(a4), p4y = c2y + r2 * (float) Math.sin(a4);
+
+            float total = r1 + r2;
+            double handle = Math.min(v * 2.4, Math.hypot(p1x - p3x, p1y - p3y) / total)
+                    * Math.min(1.0, d * 2.0 / total);
+            float h1 = (float) (r1 * handle);
+            float h2 = (float) (r2 * handle);
+            double q = Math.PI / 2.0;
+
+            shapeB.reset();
+            shapeB.moveTo(p1x, p1y);
+            shapeB.cubicTo(p1x + h1 * (float) Math.cos(a1 - q), p1y + h1 * (float) Math.sin(a1 - q),
+                    p3x + h2 * (float) Math.cos(a3 + q), p3y + h2 * (float) Math.sin(a3 + q),
+                    p3x, p3y);
+            shapeB.lineTo(p4x, p4y);
+            shapeB.cubicTo(p4x + h2 * (float) Math.cos(a4 - q), p4y + h2 * (float) Math.sin(a4 - q),
+                    p2x + h1 * (float) Math.cos(a2 + q), p2y + h1 * (float) Math.sin(a2 + q),
+                    p2x, p2y);
+            shapeB.close();
+            unionIntoShapeA();
         }
 
         private void buildShapes() {
@@ -1045,8 +1191,17 @@ public class MainActivity extends Activity {
             shapeA.transform(jelly);
 
             if (leftAccAlpha() > 0.01f) {
-                addAccShape((float) accLeft.value, accCy(),
-                        Math.max(dp(2), leftAccRadius()), 3);
+                float ar = Math.max(dp(2), leftAccRadius());
+                addAccShape((float) accLeft.value, accCy(), ar, 3);
+                // Ujung kiri kapsul = setengah lingkaran berpusat di (capLeft + r, tengah).
+                // Radius dikali skala terkecil supaya titik singgung tidak keluar dari bentuk.
+                meltPt[0] = capLeft() + r;
+                meltPt[1] = capTop() + h / 2f;
+                jelly.mapPoints(meltPt);
+                float as = accPressScale(3) * Math.min(motionScaleX(3), motionScaleY(3));
+                addMeltNeck(meltPt[0], meltPt[1], r * Math.min(jSx, jSy),
+                        (float) accLeft.value + motionTransX(3), accCy() + motionTransY(3),
+                        ar * as);
             }
             addAccShape(rightAccCx(), accCy(), accR(), 4);
 
@@ -1082,8 +1237,8 @@ public class MainActivity extends Activity {
             canvas.translate(0, (float) squish.value);
 
             buildShapes();
-            boolean hasBlur = !windowMode && snapshot != null && blurNode != null
-                    && blurEffect != null && canvas.isHardwareAccelerated();
+            boolean hasBlur = !windowMode && mode != MODE_SOLID
+                    && canvas.isHardwareAccelerated() && updateBackdrop();
             drawShadow(canvas, hasBlur);
 
             if (windowMode) {
@@ -1112,7 +1267,7 @@ public class MainActivity extends Activity {
                 int s1 = canvas.save();
                 canvas.clipPath(shapes);
                 canvas.clipRect(0, 0, w / 2f, h);
-                canvas.drawRenderNode(blurNode);
+                drawBackdrop(canvas, blurNode);
                 canvas.restoreToCount(s1);
 
                 int s2 = canvas.save();
@@ -1122,38 +1277,10 @@ public class MainActivity extends Activity {
                 fill.setColor(dark ? 0xFF1E1E1E : 0xFFFAFAFA);
                 canvas.drawRect(0, 0, w, h, fill);
                 canvas.restoreToCount(s2);
-            } else if (progressiveMode != 0 && canvas.isHardwareAccelerated()) {
-                int s1 = canvas.save();
-                canvas.clipPath(shapes);
-                canvas.drawRenderNode(blurNode);
-
-                if (snapshotShader == null) {
-                    snapshotShader = new BitmapShader(
-                            snapshot, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-                }
-                int height = getHeight();
-                if (sharpMask == null || sharpMaskMode != progressiveMode
-                        || sharpMaskHeight != height) {
-                    float top = capTop();
-                    float bottom = top + capH();
-                    int opaque = 0xFFFFFFFF;
-                    int transparent = 0x00FFFFFF;
-                    sharpMask = new LinearGradient(0, top, 0, bottom,
-                            progressiveMode == 1 ? opaque : transparent,
-                            progressiveMode == 1 ? transparent : opaque,
-                            Shader.TileMode.CLAMP);
-                    sharpPaint.setShader(new ComposeShader(
-                            snapshotShader, sharpMask, BlendMode.DST_IN));
-                    sharpMaskMode = progressiveMode;
-                    sharpMaskHeight = height;
-                }
-                // Sharp backdrop di-mask gradient: satu draw bitmap, tanpa layer/band.
-                canvas.drawRect(0, 0, w, h, sharpPaint);
-                canvas.restoreToCount(s1);
             } else {
                 int s1 = canvas.save();
                 canvas.clipPath(shapes);
-                canvas.drawRenderNode(blurNode);
+                drawGlass(canvas);
                 canvas.restoreToCount(s1);
             }
 
@@ -1181,34 +1308,47 @@ public class MainActivity extends Activity {
             if (glow <= 0.01f) return;
             int save = canvas.save();
             canvas.clipPath(shapes);
-            canvas.concat(jelly);
 
             lightPaint.setStyle(Paint.Style.FILL);
             lightPaint.setBlendMode(BlendMode.PLUS);
 
-            // 1) lift: 5.5% putih menaikkan seluruh permukaan (MorphPress.LightLift)
+            // 1) lift: 5.5% putih menaikkan muka kontrol yang ditekan (MorphPress.LightLift)
             lightPaint.setShader(null);
             lightPaint.setColor(0xFFFFFFFF);
             lightPaint.setAlpha(Math.round(255f * LIGHT_LIFT * glow));
-            canvas.drawRect(capLeft() - dp(8), capTop() - dp(8),
-                    capLeft() + capW() + dp(8), capTop() + capH() + dp(8), lightPaint);
+            if (lightTarget == 1) {
+                canvas.concat(jelly);
+                canvas.drawRect(capLeft() - dp(8), capTop() - dp(8),
+                        capLeft() + capW() + dp(8), capTop() + capH() + dp(8), lightPaint);
+            } else {
+                float acx = lightTarget == 3 ? (float) accLeft.value : rightAccCx();
+                float reach = accR() + dp(RUBBER_MAX_DP);
+                canvas.drawRect(acx - reach, accCy() - reach, acx + reach, accCy() + reach,
+                        lightPaint);
+            }
 
             // 2) pool: gaussian di bawah jari, radius 38dp (MorphPress.LightPool)
             float lx = capLeft() + (float) lightX.value;
             float ly = capTop() + (float) lightY.value;
-            float r = Math.max(1f, dp(LIGHT_RADIUS_DP));
+            float r = Math.max(1f, dp(LIGHT_RADIUS_DP)) * 2.2f;
             // Alpha dibakar ke warna: Paint.setAlpha() tidak berefek pada shader di GPU ini
             // (Skia: alpha paint + shader + blend mode != SRC_OVER), jadi pakai warna langsung.
-            int a0 = Math.round(255f * LIGHT_POOL * glow * lightGain);
+            // Shader berpusat di (0,0) dan hanya dibuat ulang saat alpha berubah.
+            int a0 = Math.min(255, Math.round(255f * LIGHT_POOL * glow * lightGain));
             if (a0 > 1) {
-                int a1 = Math.round(a0 * 0.62f);
-                int a2 = Math.round(a0 * 0.20f);
+                if (lightShader == null || lightShaderAlpha != a0) {
+                    int a1 = Math.round(a0 * 0.62f);
+                    int a2 = Math.round(a0 * 0.20f);
+                    lightShader = new RadialGradient(0f, 0f, r,
+                            new int[]{(a0 << 24) | 0xFFFFFF, (a1 << 24) | 0xFFFFFF,
+                                    (a2 << 24) | 0xFFFFFF, 0x00FFFFFF},
+                            new float[]{0f, 0.28f, 0.62f, 1f}, Shader.TileMode.CLAMP);
+                    lightShaderAlpha = a0;
+                }
                 lightPaint.setAlpha(255);
-                lightPaint.setShader(new RadialGradient(lx, ly, r * 2.2f,
-                        new int[]{(a0 << 24) | 0xFFFFFF, (a1 << 24) | 0xFFFFFF,
-                                (a2 << 24) | 0xFFFFFF, 0x00FFFFFF},
-                        new float[]{0f, 0.28f, 0.62f, 1f}, Shader.TileMode.CLAMP));
-                canvas.drawCircle(lx, ly, r * 2.2f, lightPaint);
+                lightPaint.setShader(lightShader);
+                canvas.translate(lx, ly);
+                canvas.drawCircle(0f, 0f, r, lightPaint);
             }
 
             lightPaint.setShader(null);
@@ -1217,39 +1357,35 @@ public class MainActivity extends Activity {
         }
 
         private void drawShadow(Canvas canvas, boolean material) {
-            int key = getWidth() * 31 + (leftAccAlpha() > 0.99f ? 1 : 0) + (dark ? 2 : 0)
-                    + motionTarget * 7
-                    + Math.round((float) pressSw.value * 20) * 11
-                    + Math.round((float) accS.value * 20) * 13
-                    + Math.round((float) jx.value * 100) * 17
-                    + Math.round((float) jy.value * 100) * 19
-                    + Math.round((float) dragX.value) * 23
-                    + Math.round((float) dragY.value) * 29;
-            float jxv = jTx;
-            float jyv = jTy;
-            float jnv = jSx;
-            boolean jellyMoved = Math.abs(jxv - lastShadowX) > 1.5f
-                    || Math.abs(jyv - lastShadowY) > 1.5f
-                    || Math.abs(jnv - lastShadowN) > 0.03f;
-            if (shadowNode == null || key != shadowKey || jellyMoved
+            // Kunci = semua yang mengubah siluet, termasuk posisi/skala aksesori saat melt
+            // (dulu tidak ikut, jadi bayangan aksesori melompat di akhir animasi).
+            long key = getWidth();
+            key = key * 31 + (dark ? 1 : 0);
+            key = key * 31 + motionTarget;
+            key = key * 31 + Math.round((float) pressSw.value * 50);
+            key = key * 31 + Math.round((float) accS.value * 50);
+            key = key * 31 + Math.round((float) jx.value * 200);
+            key = key * 31 + Math.round((float) jy.value * 200);
+            key = key * 31 + Math.round((float) dragX.value);
+            key = key * 31 + Math.round((float) dragY.value);
+            key = key * 31 + Math.round((float) accLeft.value);
+            key = key * 31 + Math.round((float) accScale.value * 100);
+            if (shadowNode == null || key != shadowKey
                     || (material && (causticNode == null || key != causticKey))) {
-                lastShadowX = jxv;
-                lastShadowY = jyv;
-                lastShadowN = jnv;
                 int w = getWidth();
                 int h = getHeight();
                 if (shadowNode == null || shadowNode.getWidth() != w
                         || shadowNode.getHeight() != h) {
                     shadowNode = new RenderNode("nav-shadow");
                     shadowNode.setPosition(0, 0, w, h);
+                    shadowNode.setRenderEffect(RenderEffect.createBlurEffect(
+                            dp(12), dp(12), Shader.TileMode.CLAMP));
                 }
                 // Fallback COUI: elevation 2, shadow size level 3 (12dp), #8A000000.
                 shadowPaint.setColor(0x8A000000);
                 RecordingCanvas rc = shadowNode.beginRecording();
                 rc.drawPath(shapes, shadowPaint);
                 shadowNode.endRecording();
-                shadowNode.setRenderEffect(RenderEffect.createBlurEffect(
-                        dp(12), dp(12), Shader.TileMode.CLAMP));
                 shadowKey = key;
 
                 if (material) {
@@ -1257,14 +1393,14 @@ public class MainActivity extends Activity {
                             || causticNode.getHeight() != h) {
                         causticNode = new RenderNode("nav-caustic");
                         causticNode.setPosition(0, 0, w, h);
+                        causticNode.setRenderEffect(RenderEffect.createBlurEffect(
+                                dp(10.4f), dp(10.4f), Shader.TileMode.CLAMP));
                     }
                     // Caustic COUI: #42FFFFFF, layout level 4 (bottom 4.9dp, SDF 10.4dp).
                     causticPaint.setColor(0x42FFFFFF);
                     RecordingCanvas rc2 = causticNode.beginRecording();
                     rc2.drawPath(shapes, causticPaint);
                     causticNode.endRecording();
-                    causticNode.setRenderEffect(RenderEffect.createBlurEffect(
-                            dp(10.4f), dp(10.4f), Shader.TileMode.CLAMP));
                     causticKey = key;
                 }
             }
@@ -1292,14 +1428,22 @@ public class MainActivity extends Activity {
             strokePaint.setColor(dark ? 0x14FFFFFF : 0x1AFFFFFF);
             canvas.drawPath(shapes, strokePaint);
 
+            // Garis 1 px: terang di atas, memudar ke bawah. Gradient vertikal setinggi kapsul
+            // berlaku sama untuk kapsul dan kedua aksesori (tingginya sama), jadi tiap bentuk
+            // punya highlight sendiri. Versi diagonal selebar kapsul membuat aksesori kiri
+            // terang seluruhnya dan aksesori kanan gelap seluruhnya.
             strokePaint.setStrokeWidth(dp(1));
-            int c1 = dark ? 0x66FFFFFF : 0x70FFFFFF;
-            int c2 = dark ? 0x1AFFFFFF : 0x1AFFFFFF;
-            int c3 = dark ? 0x33000000 : 0x22000000;
-            strokePaint.setShader(new LinearGradient(
-                    capLeft(), capTop(), capLeft() + capW(), capTop() + capH(),
-                    new int[]{c1, c2, c3}, new float[]{0f, 0.55f, 1f},
-                    Shader.TileMode.CLAMP));
+            int shaderKey = getHeight() * 2 + (dark ? 1 : 0);
+            if (strokeShader == null || strokeShaderKey != shaderKey) {
+                int c1 = dark ? 0x66FFFFFF : 0x70FFFFFF;
+                int c2 = 0x1AFFFFFF;
+                int c3 = dark ? 0x33000000 : 0x22000000;
+                strokeShader = new LinearGradient(0, capTop(), 0, capTop() + capH(),
+                        new int[]{c1, c2, c3}, new float[]{0f, 0.55f, 1f},
+                        Shader.TileMode.CLAMP);
+                strokeShaderKey = shaderKey;
+            }
+            strokePaint.setShader(strokeShader);
             canvas.drawPath(shapes, strokePaint);
             strokePaint.setShader(null);
         }
