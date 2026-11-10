@@ -147,13 +147,14 @@ COUI; press hand-up bounce 0.6.
 | Bagian | Status |
 |---|---|
 | Light pool | masih model Swell: radius 40 dp, lift 5.5%, pool 7% × gain 1.5, blend PLUS. COUI memakai `COUISpotLightEffectDrawable` (`TYPE_OPAQUE_MEDIUM_2` untuk menu, `TYPE_BOTTOM_NAVIGATION` untuk tombol), alpha spring 0.2 |
-| Melt-ball | `Path.Op.UNION`; COUI memakai metaball OPlus (SDF) |
-| Blur | snapshot + RenderEffect 25 px; COUI memakai `OplusViewBackgroundRenderEffect` live |
+| Melt-ball | `Path.Op.UNION` + leher bezier singgung (putus di celah 12 dp); COUI memakai metaball OPlus (SDF) |
+| Blur | konten direkam ke `RenderNode` + RenderEffect 25 px `MIRROR`; COUI memakai `OplusViewBackgroundRenderEffect` live |
 | Drop shadow | approximation fallback COUI: `#8A000000`, blur 12 dp, offset 2 dp |
 | Caustic shadow | approximation `#42FFFFFF`, blur 10.4 dp, offset 4.9 dp (layout level 4). COUI tombol aksesori level 5 (blur 20 dp, offset 11.2 dp) belum dipisah per view |
-| Stroke `CAPSULE_3` | approximation: faint 3 dp rim + 1 px gradient diagonal; bukan `TYPE_FRAMEWORK_CAPSULE_3` native |
+| Stroke `CAPSULE_3` | approximation: faint 3 dp rim + 1 px gradient vertikal; bukan `TYPE_FRAMEWORK_CAPSULE_3` native |
 | Smooth corner | belum diport (OPlus `OplusMaterialCornerParams`) |
-| Scrim & hide/show menu | belum ada di PoC |
+| Scrim | gradient alpha 0.64 di dasar konten; tinggi dan pemicu fade perkiraan PoC |
+| Hide/show menu | belum ada di PoC |
 
 ## 7. Alat tuning
 

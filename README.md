@@ -36,6 +36,7 @@ PoC controls:
 - `prog`: `0` uniform 25 px, `1` 0→25 px down, `2` 25→0 px down
 - `jelly`: `2` = 3× motion boost
 - `--ef light 3`, `--ef lean 2`, `--ef speed 1.4`, `--ef slowmo 10`
+- `--ei scrim 0` (no bottom scrim), `--ei squish 0` (no bar squish on fling)
 
 `poc/README.md` and `poc/jelly-spec.md` contain the measured/verified numbers.
 `poc/keystore/` is generated automatically by `build.sh` (debug key only).
