@@ -235,7 +235,9 @@ Uninstall: `adb uninstall dev.iqbal.blurnavpoc`
   uniform 25 px; efek di video ColorOS 17 bisa berasal dari build/framework yang lebih baru.
 - Angka jank lama (RMX3630: ~6% progressive 2-layer vs ~4% uniform) diukur pada
   implementasi snapshot bitmap; implementasi sekarang **belum diukur ulang**. Mode
-  progressive memakai dua `saveLayer` tambahan per frame.
+  progressive menggambar dua node backdrop tambahan; mask gradient-nya ada di dalam
+  `RenderEffect` (`createBlendModeEffect` + `createShaderEffect`), bukan `saveLayer`,
+  karena di RMX3630 `RenderNode` di dalam `saveLayer` kehilangan efeknya.
 - Tinggi scrim (132 dp) dan kapan ia memudar adalah perkiraan PoC; APK memakai bitmap
   `main_tab_bottom_nav_mask_repeat` dan menganimasikan alpha view-nya.
 - Animasi hide/show menu (foreground blur 0 → 30 px) belum ada.
