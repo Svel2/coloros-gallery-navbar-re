@@ -151,7 +151,9 @@ public class MainActivity extends Activity {
         bar.setLightGain(getIntent().getFloatExtra("light", 1.5f));
         bar.setLeanGain(getIntent().getFloatExtra("lean", 1f));
         squishOnFling = getIntent().getIntExtra("squish", 1) != 0;
-        gallery.setScrimEnabled(getIntent().getIntExtra("scrim", 1) != 0);
+        // Default mati: di APK alpha bottomTranslucentView berawal 0 dan hanya dianimasikan,
+        // dan scrim permanen membuat kaca bar hampir putih di tema terang.
+        gallery.setScrimEnabled(getIntent().getIntExtra("scrim", 0) != 0);
 
         float slowmo = getIntent().getFloatExtra("slowmo", 1f);
         if (slowmo > 0f && slowmo != 1f) {
@@ -288,7 +290,11 @@ public class MainActivity extends Activity {
         private final int[] locSelf = new int[2];
         /** 0 = uniform (seperti APK), 1 = 0→25 px ke bawah, 2 = 25→0 px ke bawah. */
         private int progressiveMode = 1;
-        private int backdropMode = -1;
+        private final Paint maskPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private Shader maskSharp;
+        private Shader maskMid;
+        private int maskMode = -1;
+        private int maskHeight = -1;
         private RenderNode shadowNode;
         private RenderNode causticNode;
         private long shadowKey = -1;
@@ -435,6 +441,7 @@ public class MainActivity extends Activity {
             // Sama seperti item view COUI: teks tetap tajam saat seluruh kapsul ditransform.
             textPaint.setLinearText(true);
             textPaint.setSubpixelText(true);
+            maskPaint.setBlendMode(BlendMode.DST_IN);
         }
 
         void bindContent(View v) {
@@ -913,31 +920,13 @@ public class MainActivity extends Activity {
             int nh = getHeight() + BLUR_PAD * 2;
             try {
                 if (contentNode == null || contentNode.getWidth() != w
-                        || contentNode.getHeight() != nh || backdropDark != dark
-                        || backdropMode != progressiveMode) {
+                        || contentNode.getHeight() != nh || backdropDark != dark) {
                     contentNode = new RenderNode("nav-content");
                     contentNode.setPosition(0, 0, w, nh);
-                    blurNode = effectNode("nav-blur", w, nh, BLUR_RADIUS, null);
-                    if (progressiveMode != 0) {
-                        // Mask gradient dalam koordinat node (bar digeser BLUR_PAD ke bawah).
-                        float near = BLUR_PAD + (progressiveMode == 1 ? capTop() : capTop() + capH());
-                        float far = BLUR_PAD + (progressiveMode == 1 ? capTop() + capH() : capTop());
-                        int on = 0xFFFFFFFF;
-                        int off = 0x00FFFFFF;
-                        midNode = effectNode("nav-blur-mid", w, nh, BLUR_RADIUS_MID,
-                                new LinearGradient(0, near, 0, far,
-                                        new int[]{on, on, off, off},
-                                        new float[]{0f, 0.35f, 0.9f, 1f}, Shader.TileMode.CLAMP));
-                        tintNode = effectNode("nav-tint", w, nh, 0f,
-                                new LinearGradient(0, near, 0, far,
-                                        new int[]{on, off, off},
-                                        new float[]{0f, 0.45f, 1f}, Shader.TileMode.CLAMP));
-                    } else {
-                        midNode = null;
-                        tintNode = null;
-                    }
+                    blurNode = effectNode("nav-blur", w, nh, BLUR_RADIUS);
+                    midNode = effectNode("nav-blur-mid", w, nh, BLUR_RADIUS_MID);
+                    tintNode = effectNode("nav-tint", w, nh, 0f);
                     backdropDark = dark;
-                    backdropMode = progressiveMode;
                     contentDirty = true;
                 }
                 if (contentDirty) {
@@ -952,8 +941,8 @@ public class MainActivity extends Activity {
                         contentNode.endRecording();
                     }
                     recordEffect(blurNode);
-                    if (midNode != null) recordEffect(midNode);
-                    if (tintNode != null) recordEffect(tintNode);
+                    recordEffect(midNode);
+                    recordEffect(tintNode);
                     contentDirty = false;
                 }
                 return true;
@@ -966,25 +955,13 @@ public class MainActivity extends Activity {
             }
         }
 
-        /**
-         * Node backdrop dengan blur + tint. Kalau {@code mask} diisi, alpha hasilnya dipotong
-         * gradient itu di dalam RenderEffect yang sama (DST_IN). Mask sengaja tidak dibuat
-         * dengan saveLayer di kanvas: di device uji (realme RMX3630, Android 14) RenderNode
-         * yang digambar di dalam saveLayer kehilangan RenderEffect-nya, jadi layer tajam dan
-         * tengah tampil tanpa tint.
-         */
-        private RenderNode effectNode(String name, int w, int h, float radius, Shader mask) {
+        private RenderNode effectNode(String name, int w, int h, float radius) {
             RenderNode node = new RenderNode(name);
             node.setPosition(0, 0, w, h);
-            RenderEffect effect = buildBlurEffect(radius,
+            node.setRenderEffect(buildBlurEffect(radius,
                     dark ? 0x80666666 : 0xB3666666,
                     dark ? BlendMode.OVERLAY : BlendMode.COLOR_DODGE,
-                    dark ? 0xB3262626 : 0x99F5F5F5);
-            if (mask != null) {
-                effect = RenderEffect.createBlendModeEffect(
-                        effect, RenderEffect.createShaderEffect(mask), BlendMode.DST_IN);
-            }
-            node.setRenderEffect(effect);
+                    dark ? 0xB3262626 : 0x99F5F5F5));
             return node;
         }
 
@@ -1016,14 +993,39 @@ public class MainActivity extends Activity {
             canvas.restoreToCount(save);
         }
 
+        /** Layer backdrop yang alpha-nya dipotong gradient vertikal (DST_IN). */
+        private void drawMaskedBackdrop(Canvas canvas, RenderNode node, Shader mask) {
+            int layer = canvas.saveLayer(0, 0, getWidth(), getHeight(), null);
+            drawBackdrop(canvas, node);
+            maskPaint.setShader(mask);
+            canvas.drawRect(0, 0, getWidth(), getHeight(), maskPaint);
+            canvas.restoreToCount(layer);
+        }
+
         /**
          * Kaca: blur 25 px penuh; mode progressive menumpuk 10 px lalu 0 px di sisi tajamnya.
          * Ketiga tingkat memakai tint yang sama, jadi warna kaca rata dari atas ke bawah.
          */
         private void drawGlass(Canvas canvas) {
             drawBackdrop(canvas, blurNode);
-            if (midNode != null) drawBackdrop(canvas, midNode);
-            if (tintNode != null) drawBackdrop(canvas, tintNode);
+            if (progressiveMode == 0) return;
+            int height = getHeight();
+            if (maskSharp == null || maskMode != progressiveMode || maskHeight != height) {
+                float near = progressiveMode == 1 ? capTop() : capTop() + capH();
+                float far = progressiveMode == 1 ? capTop() + capH() : capTop();
+                int on = 0xFFFFFFFF;
+                int off = 0x00FFFFFF;
+                maskSharp = new LinearGradient(0, near, 0, far,
+                        new int[]{on, off, off}, new float[]{0f, 0.45f, 1f},
+                        Shader.TileMode.CLAMP);
+                maskMid = new LinearGradient(0, near, 0, far,
+                        new int[]{on, on, off, off}, new float[]{0f, 0.35f, 0.9f, 1f},
+                        Shader.TileMode.CLAMP);
+                maskMode = progressiveMode;
+                maskHeight = height;
+            }
+            drawMaskedBackdrop(canvas, midNode, maskMid);
+            drawMaskedBackdrop(canvas, tintNode, maskSharp);
         }
 
         // ---------------- anim loop ----------------

@@ -72,7 +72,7 @@ public class FluidGalleryView extends View {
     /** main_tab_bottom_nav_mask_repeat: alpha 0.64. Tinggi di sini perkiraan PoC. */
     private static final float SCRIM_ALPHA = 0.64f;
     private static final float SCRIM_HEIGHT_DP = 132f;
-    private boolean scrimEnabled = true;
+    private boolean scrimEnabled = false;
     private final Paint scrimPaint = new Paint();
     private Shader scrimShader;
     private int scrimKey = -1;

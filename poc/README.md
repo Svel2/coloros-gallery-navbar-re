@@ -83,7 +83,7 @@ Item aktif memakai ikon **filled**, item pasif **outline** — sama seperti Gall
 | Light tint | `#B3666666` COLOR_DODGE → `#99F5F5F5` LUMINOSITY |
 | Dark tint | `#80666666` OVERLAY → `#B3262626` LUMINOSITY |
 | Bentuk | kapsul + 2 lingkaran aksesori, radius = tinggi/2; rim 3 dp faint + garis 1 px gradient vertikal (terang di atas) yang sama untuk ketiga bentuk |
-| Scrim | gradient transparan → warna latar, alpha 0.64, di dasar konten (padanan `bottomTranslucentView`); ikut ter-blur oleh bar. `--ei scrim 0` mematikan |
+| Scrim | gradient transparan → warna latar, alpha 0.64, di dasar konten (padanan `bottomTranslucentView`); ikut ter-blur oleh bar. **Default mati**, `--ei scrim 1` menyalakan |
 | Shadow | fallback `#8A000000`, 12 dp, offset 2 dp; caustic putih `#42FFFFFF`, 10.4 dp, offset 4.9 dp |
 | Fallback | `couiColorBar` `#FAFAFA` / `#1E1E1E` |
 | Mode | `SPLIT` (kiri blur / kanan solid), `BLUR`, `SOLID`, `Window blur` |
@@ -177,7 +177,9 @@ Angka acuan ada di [jelly-spec.md](jelly-spec.md); capture ulang menyusul.
 
 Catatan: **semua** GIF dan screenshot di folder ini diambil sebelum perubahan backdrop
 `RenderNode`, progressive blur 3 tingkat, leher metaball, stroke vertikal, dan scrim.
-Perubahan itu baru dicek kompilasinya, belum dijalankan dan di-capture di device.
+Di RMX3630 (Android 14) sudah dicek lewat screenshot: blur muncul dan tint progressive
+rata di mode off/down/up, tab Photos, tema terang. Melt aksesori, tema gelap, dan jank
+belum dicek.
 
 Catatan: `screenrecord` di device ini segfault, jadi GIF disusun dari `screencap` per fase gerakan (bukan rekaman 60 fps). Animasi aslinya tetap spring-driven via `Choreographer`.
 
@@ -203,7 +205,7 @@ adb shell am start -n dev.iqbal.blurnavpoc/.MainActivity --ei mode 1 --ei dark 0
 # jelly: default = port COUI (press 0.85-0.97, rubber 28dp, deform 150dp); --ei jelly 2 = boost 3x
 # progressive: --ei prog 0 (uniform) / 1 (0->25px ke bawah) / 2 (25->0px ke bawah)
 # knob tuning: --ef lean 2 (gain jelly), --ef light 3 (pool 3x)
-# scrim bawah: --ei scrim 0 (mati); squish bar saat fling: --ei squish 0 (mati)
+# scrim bawah: --ei scrim 1 (nyala, default mati); squish bar saat fling: --ei squish 0 (mati)
 # window blur: adb shell am start -n dev.iqbal.blurnavpoc/.WindowBlurActivity --ei dark 0
 ```
 
@@ -235,11 +237,11 @@ Uninstall: `adb uninstall dev.iqbal.blurnavpoc`
   uniform 25 px; efek di video ColorOS 17 bisa berasal dari build/framework yang lebih baru.
 - Angka jank lama (RMX3630: ~6% progressive 2-layer vs ~4% uniform) diukur pada
   implementasi snapshot bitmap; implementasi sekarang **belum diukur ulang**. Mode
-  progressive menggambar dua node backdrop tambahan; mask gradient-nya ada di dalam
-  `RenderEffect` (`createBlendModeEffect` + `createShaderEffect`), bukan `saveLayer`,
-  karena di RMX3630 `RenderNode` di dalam `saveLayer` kehilangan efeknya.
+  progressive memakai dua `saveLayer` tambahan per frame.
 - Tinggi scrim (132 dp) dan kapan ia memudar adalah perkiraan PoC; APK memakai bitmap
-  `main_tab_bottom_nav_mask_repeat` dan menganimasikan alpha view-nya.
+  `main_tab_bottom_nav_mask_repeat` dan menganimasikan alpha view-nya dari 0. Scrim
+  default mati: saat menyala terus di RMX3630 (tema terang) kaca bar jadi hampir putih
+  (`236,249,232`) dan tile di bawahnya pudar.
 - Animasi hide/show menu (foreground blur 0 → 30 px) belum ada.
 - Leher metaball adalah konstruksi geometri (bezier singgung), bukan SDF
   `OplusMaterialMetaBallParams`; hanya dipasang antara kapsul dan aksesori kiri.
